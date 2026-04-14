@@ -8,7 +8,7 @@ from transformers import pipeline, AutoTokenizer,AutoModelForSeq2SeqLM
 from openai import OpenAI
 import os
 import pdfplumber
-
+from context_aware_chunking import advanced_smart_chunk
 client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
     base_url="https://api.groq.com/openai/v1"
@@ -18,20 +18,6 @@ gen_model =AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large")
 model = SentenceTransformer("all-mpnet-base-v2")
 tfidf=TfidfVectorizer()
 reranker = CrossEncoder("BAAI/bge-reranker-large")
-text1 = """
-Global Dynamics Tech Solutions, founded in 1998 by Dr. Helena Vance in Seattle, remains a pioneer in the integration 
-of specialized cloud infrastructure and proprietary machine learning algorithms designed for the manufacturing sector.
-The company's flagship product, 'NexusCore,' utilizes advanced neural networks to predict equipment failure before it 
-occurs, a process known in the industry as predictive maintenance. While their primary headquarters moved to a sustainable 
-campus in Austin, Texas in 2014, they maintain satellite offices in Berlin and Tokyo to manage their international logistics
-and supply chain optimization software. In 2022, Global Dynamics announced a strategic partnership with the European Space 
-Agency to develop radiation-hardened semiconductors for deep-space exploration probes. Their corporate culture emphasizes a 
-'remote-first' approach, utilizing agile methodology and various DevOps tools like Jenkins and Kubernetes to maintain high deployment 
-frequency. Despite market volatility, the firm recently reported a twenty percent increase in annual recurring revenue, largely attributed 
-to their new cybersecurity suite, 'AegisShield,' which offers end-to-end encryption and biometric authentication for remote workers. 
-Sustainability is also a core pillar of their operations, as they have pledged to be carbon neutral by 2030 through the use of 
-solar-powered data centers and advanced water-cooling systems for their server racks.
-"""
 
 def smart_chunk(text, max_chunk_size=200):
     sentences = re.split(r'(?<=[.!?]) +', text)
@@ -60,28 +46,28 @@ def extract_text_from_pdf(filepath):
   
   return text
 path = "nelson-mandela.pdf"
-text=extract_text_from_pdf(path)
-documents=smart_chunk(text)
-embedings = model.encode(documents)
+documents=advanced_smart_chunk(path)
+texts =[doc["text"] for doc in documents ]
+embedings = model.encode(texts)
 faiss.normalize_L2(embedings)
 embedings= np.array(embedings).astype('float32')
 dimension =embedings.shape[1]
 index = faiss.IndexFlatIP(dimension)
 index.add(embedings)
-tfidf_matrix = tfidf.fit_transform(documents)
+tfidf_matrix = tfidf.fit_transform(texts)
 
 
 
 
 
-def keyword_search(query,top_k=5):
+def keyword_search(query,top_k=10):
   query_vec=tfidf.transform([query])
   scores =cosine_similarity(query_vec,tfidf_matrix)[0]
   top_indices = scores.argsort()[-top_k:][::-1]
   return top_indices, scores
 
 
-def vector_search(question,k=5):
+def vector_search(question,k=10):
   question_embeding=model.encode([question])
   question_embeding = np.array(question_embeding).astype('float32')
   faiss.normalize_L2(question_embeding)
@@ -176,10 +162,10 @@ def choose_better_question(question):
 
 
 def rerank(documents,question,top_k=5):
-  pairs = [(question, doc) for doc in documents]
+  pairs = [(question, doc["text"]) for doc in documents]
   scores = reranker.predict(pairs)
   ranked = sorted(zip(scores, documents), key=lambda x: x[0], reverse=True)
-  ranked_docs = [doc for _, doc in ranked[:top_k]]
+  ranked_docs = [doc["text"] for _, doc in ranked[:top_k]]
 
   return ranked_docs
   

@@ -7,15 +7,16 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from transformers import pipeline, AutoTokenizer,AutoModelForSeq2SeqLM
 from openai import OpenAI
 import os
-import pdfplumber
 from context_aware_chunking import advanced_smart_chunk
 from pydantic import BaseModel
 from fastapi import FastAPI
 from query_expansion import expand_query
-client = OpenAI(
-    api_key=os.getenv("GROQ_API_KEY"),
-    base_url="https://api.groq.com/openai/v1"
-)
+from reranker import rerank
+from answer_generator import generate_answer
+
+def QueryRequest(BaseModel):
+   question:str
+
 tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
 gen_model =AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large")
 model = SentenceTransformer("all-mpnet-base-v2")
@@ -23,34 +24,6 @@ tfidf=TfidfVectorizer()
 reranker = CrossEncoder("BAAI/bge-reranker-large")
 app = FastAPI()
 
-def QueryRequest(BaseModel):
-   question:str
-def smart_chunk(text, max_chunk_size=200):
-    sentences = re.split(r'(?<=[.!?]) +', text)
-
-    chunks = []
-    current_chunk = ""
-
-    for sentence in sentences:
-        if len(current_chunk) + len(sentence) <= max_chunk_size:
-            current_chunk += " " + sentence
-        else:
-            chunks.append(current_chunk.strip())
-            current_chunk = sentence
-
-    if current_chunk:
-        chunks.append(current_chunk.strip())
-
-    return chunks
-
-
-def extract_text_from_pdf(filepath):
-  text =""
-  with pdfplumber.open(filepath) as pdf:
-    for page in pdf.pages:
-      text+=page.extract_text()+"\n"
-  
-  return text
 path = "nelson-mandela.pdf"
 documents=advanced_smart_chunk(path)
 texts =[doc["text"] for doc in documents ]
@@ -61,10 +34,6 @@ dimension =embedings.shape[1]
 index = faiss.IndexFlatIP(dimension)
 index.add(embedings)
 tfidf_matrix = tfidf.fit_transform(texts)
-
-
-
-
 
 def keyword_search(query,top_k=10):
   query_vec=tfidf.transform([query])
@@ -81,99 +50,8 @@ def vector_search(question,k=10):
   distances, indices = index.search(question_embeding,k)
   return distances,indices
 
-def generate_answer(context,question):
-  prompt =f"""You are a Technical Assistant. Your goal is to explain concepts clearly based on the provided documentation..
-
-    Rules:
-    - Do NOT guess
-    - Do NOT add external knowledge
-    - If the answer is not clearly stated, say EXACTLY: "I don't know"
-    - Synthesize the information into a professional summary.
-    - Do NOT copy the text word-for-word.
-    - Use a helpful, educational tone.
-    - If the context doesn't have the answer, say "I'm sorry, I don't have enough information on that topic."
-    -Answer in a complete sentence.Do not give short phrases.
-
-    Context:
-    {context}
-
-    Question:
-    {question}
-    """
-  inputs = tokenizer(prompt,return_tensors="pt")
-  outputs= gen_model.generate(**inputs,max_length=100,temperature=0.7,repetition_penalty=1.6,top_p=0.6)
-  return tokenizer.decode(outputs[0],skip_special_tokens=True)
 
 
-def generate_answer1(context, question):
-    prompt = f"""
-You are a highly accurate technical assistant.
-
-STRICT RULES:
-- Answer ONLY using the provided context
-- Do NOT add external knowledge
-- If the answer is not in the context, only say: "I am sorry I don't have enough knowldge about it "
-- Be clear, structured, and professional
-
-Context:
-{context}
-
-Question:
-{question}
-"""
-
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile", 
-        messages=[
-            {"role": "system", "content": "You are a precise RAG assistant."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.2,
-        max_tokens=200
-    )
-
-    return response.choices[0].message.content
-
-
-def rewrite_question(question):
-  rewrite_prompt = f"""Rewrite the question for better document retrieval.
-
-    STRICT RULES:
-    - Do NOT change the meaning
-    - Do NOT add new information
-    - Only clarify or expand slightly
-    - Keep the same intent
-    - If already clear, return it unchanged
-
-    Question: {question}
-    Rewritten:
-          """
-  inputs = tokenizer(rewrite_prompt,return_tensors="pt")
-  outputs= gen_model.generate(**inputs,max_length=100,temperature=0.2,do_sample=False)
-  return tokenizer.decode(outputs[0],skip_special_tokens=True)
-
-def choose_better_question(question):
-  rewritten=rewrite_question(question)
-  question_embeding=model.encode([question])
-  rewritten_embeding = model.encode([rewritten])
-  question_score = cosine_similarity(rewritten_embeding,question_embeding)
-  print(f"question_score {question_score}")
-  print(f"question {question}")
-  print(f"rewritten {rewritten}")
-  if question_score>0.8:
-    return rewritten
-  else:
-     return question
-
-
-
-def rerank(documents,question,top_k=5):
-  pairs = [(question, doc["text"]) for doc in documents]
-  scores = reranker.predict(pairs)
-  ranked = sorted(zip(scores, documents), key=lambda x: x[0], reverse=True)
-  ranked_docs = [doc["text"] for _, doc in ranked[:top_k]]
-
-  return ranked_docs
   
 def ask_rag(question):
   quiries =expand_query(question)
@@ -197,11 +75,9 @@ def ask_rag(question):
   all_keyword_scores=np.concatenate(all_keyword_scores)
   combined_distances = {}
   alpha=0.65
-    # Vector scores
   for i, score in zip(all_vector_indices, all_vector_scores):
       combined_distances[i] = alpha * score
 
-  # Keyword scores
   for i, score in zip(all_keyword_indices, all_keyword_scores): 
     if i in combined_distances:
         combined_distances[i] += (1 - alpha) * score
@@ -213,14 +89,6 @@ def ask_rag(question):
   retrieved = [documents[i] for i,_ in combined_distances]
   print("combined")
   print(combined_distances)
-  #print(distances[0])
-  # print(indices[0])
-  # for i in indices[0]:
-  #   print(documents[i])
-  # for i, score in score_map.items():
-  #   if score > 0.3:
-  #     retrieved.append(documents[i])
-  # print(retrieved)
   if not retrieved:
     return "I don't know"
   ranked_docs=rerank(retrieved,question)
@@ -229,7 +97,7 @@ def ask_rag(question):
   context = "\n\n".join(ranked_docs[:3])
 
   
-  return generate_answer1(context,question)
+  return generate_answer(context,question)
 
 
 @app.post("/ask")

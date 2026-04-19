@@ -9,6 +9,9 @@ from openai import OpenAI
 import os
 import pdfplumber
 from context_aware_chunking import advanced_smart_chunk
+from pydantic import BaseModel
+from fastapi import FastAPI
+
 client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
     base_url="https://api.groq.com/openai/v1"
@@ -18,7 +21,10 @@ gen_model =AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large")
 model = SentenceTransformer("all-mpnet-base-v2")
 tfidf=TfidfVectorizer()
 reranker = CrossEncoder("BAAI/bge-reranker-large")
+app = FastAPI()
 
+def QueryRequest(BaseModel):
+   question:str
 def smart_chunk(text, max_chunk_size=200):
     sentences = re.split(r'(?<=[.!?]) +', text)
 
@@ -220,7 +226,11 @@ def ask_rag(question):
 
   
   return generate_answer1(context,question)
-print(ask_rag("who suceeded mandela?"))
 
+
+@app.post("/ask")
+def ask(request:QueryRequest):
+   answer =ask_rag(request.question)
+   return {"answer": answer}
 
 

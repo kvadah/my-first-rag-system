@@ -11,7 +11,7 @@ import pdfplumber
 from context_aware_chunking import advanced_smart_chunk
 from pydantic import BaseModel
 from fastapi import FastAPI
-
+from query_expansion import expand_query
 client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
     base_url="https://api.groq.com/openai/v1"
@@ -176,38 +176,42 @@ def rerank(documents,question,top_k=5):
   return ranked_docs
   
 def ask_rag(question):
+  quiries =expand_query(question)
+  quiries.append(question)
+  all_vector_indices=[]
+  all_vector_scores=[]
+  all_keyword_indices=[]
+  all_keyword_scores=[]
+  for q in quiries:
+    print(q)
+    vector_scores, vector_indices = vector_search(q)
+    keyword_indices, keyword_scores = keyword_search(q)
+    all_vector_indices.append(vector_indices)
+    all_vector_scores.append(vector_scores)
+    all_keyword_indices.append(keyword_indices)
+    all_keyword_scores.append(keyword_scores)
 
-  question =choose_better_question(question)
-  print(question)
-  question=question.lower()
-  question_embeding=model.encode([question])
-  vector_distances,vector_indices=vector_search(question)
-  vector_indices=vector_indices[0].tolist()
-  vector_distances=vector_distances[0].tolist()
-  keyword_indices, keyword_distances = keyword_search(question,)
-  keyword_distances=keyword_distances.tolist()
-  print(keyword_indices)
-  combined_indices = list(set(vector_indices + keyword_indices.tolist()))
-  # combined_distances =list(set(vector_distances+keyword_distances.tolist()))
+  all_vector_indices=np.concatenate(all_vector_indices)
+  all_vector_scores=np.concatenate(all_vector_scores)
+  all_keyword_indices=np.concatenate(all_keyword_indices)
+  all_keyword_scores=np.concatenate(all_keyword_scores)
   combined_distances = {}
   alpha=0.65
     # Vector scores
-  for i, score in zip(vector_indices, vector_distances):
+  for i, score in zip(all_vector_indices, all_vector_scores):
       combined_distances[i] = alpha * score
 
   # Keyword scores
-  for i in keyword_indices:
-      score = keyword_distances[i]
-      if i in combined_distances:
-          combined_distances[i] += (1 - alpha) * score
-      else:
-          combined_distances[i] = (1 - alpha) * score
+  for i, score in zip(all_keyword_indices, all_keyword_scores): 
+    if i in combined_distances:
+        combined_distances[i] += (1 - alpha) * score
+    else:
+        combined_distances[i] = (1 - alpha) * score
 
 
   combined_distances = sorted(combined_distances.items(), key=lambda x: x[1], reverse=True)
   retrieved = [documents[i] for i,_ in combined_distances]
   print("combined")
-  print(combined_indices)
   print(combined_distances)
   #print(distances[0])
   # print(indices[0])

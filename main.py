@@ -13,7 +13,8 @@ from fastapi import FastAPI
 from query_expansion import expand_query
 from reranker import rerank
 from answer_generator import generate_answer
-
+from classify_query import classify_query
+from generate_list_answer import generate_list_answer
 def QueryRequest(BaseModel):
    question:str
 
@@ -110,28 +111,34 @@ def ask_rag(question):
   all_vector_scores=np.concatenate(all_vector_scores)
   all_keyword_indices=np.concatenate(all_keyword_indices)
   all_keyword_scores=np.concatenate(all_keyword_scores)
-  combined_distances = {}
-  alpha=0.65
-  for i, score in zip(all_vector_indices, all_vector_scores):
-      combined_distances[i] = alpha * score
-
-  for i, score in zip(all_keyword_indices, all_keyword_scores): 
-    if i in combined_distances:
-        combined_distances[i] += (1 - alpha) * score
-    else:
-        combined_distances[i] = (1 - alpha) * score
+  question_type = classify_query(question)
+  sorted_list = rrf_fusion(all_vector_indices,all_keyword_indices)
 
 
-  combined_distances = sorted(combined_distances.items(), key=lambda x: x[1], reverse=True)
-  sorted_list = [(int(i), float(score)) for i, score in combined_distances]
+  if question_type=="LIST":
+      retrieved = [
+      {
+          "text": texts[i],
+          "metadata": id_to_metadata[i]
+      }
+      for i, _ in sorted_list[:40]
+              ]
+      ranked_context_texts = rerank(retrieved, quiries[0],top_k=25)
+      print(ranked_context_texts)
+      context = "\n\n".join([item['text'] for item in ranked_context_texts])
+      return generate_list_answer(question,context)
+  
+
+
+
+
   retrieved=[]
-  for i,_ in sorted_list[:40]:
+  for i,_ in sorted_list[:6]:
         retrieved.append({
             "text":texts[i],
             "metadata":id_to_metadata[i]
         })
-  print("combined")
-  print(combined_distances)
+ 
   if not retrieved:
     return "I don't know"
   ranked_docs=rerank(retrieved,question)

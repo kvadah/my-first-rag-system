@@ -24,9 +24,10 @@ tfidf=TfidfVectorizer()
 reranker = CrossEncoder("BAAI/bge-reranker-large")
 app = FastAPI()
 
-path = "nelson-mandela.pdf"
+path = "ET_Criminal_Code.pdf"
 documents=advanced_smart_chunk(path)
 texts =[doc["text"] for doc in documents ]
+metadatas = [doc['metadata'] for doc in documents]
 embedings = model.encode(texts)
 faiss.normalize_L2(embedings)
 embedings= np.array(embedings).astype('float32')
@@ -34,6 +35,9 @@ dimension =embedings.shape[1]
 index = faiss.IndexFlatIP(dimension)
 index.add(embedings)
 tfidf_matrix = tfidf.fit_transform(texts)
+
+
+id_to_metadata = {i: metadatas[i] for i in range(len(metadatas))}
 
 def keyword_search(query,top_k=10):
   query_vec=tfidf.transform([query])
@@ -86,7 +90,13 @@ def ask_rag(question):
 
 
   combined_distances = sorted(combined_distances.items(), key=lambda x: x[1], reverse=True)
-  retrieved = [documents[i] for i,_ in combined_distances]
+  sorted_list = [(int(i), float(score)) for i, score in sorted_indices]
+  retrieved=[]
+  for i,_ in sorted_list[:40]:
+        retrieved.append({
+            "text":texts[i],
+            "metadata":id_to_metadata[i]
+        })
   print("combined")
   print(combined_distances)
   if not retrieved:

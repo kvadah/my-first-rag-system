@@ -30,7 +30,28 @@ def extract_pages(file_path):
           "text": text,
           "section": current_section
       }
+def extract_articles(file_path):
+   reader = PdfReader(file_path)
+   text=""
+   for i, page in enumerate(reader.pages):
+       # text += f"\n[PAGE {i+1}]\n"
+        text += page.extract_text()
+   pattern = r"(Article\s+\d+.*?)(?=Article\s+\d+|$)"
+   articles = re.findall(pattern, text, re.DOTALL)
+   return articles
 
+
+def structured_articles(file_path):
+  structured_articles = []
+  articles = extract_articles(file_path)
+  for article in articles:
+    lines = article.strip().split("\n")
+    title_line = lines[0]
+    structured_articles.append({
+        "title": title_line,
+        "content": article
+    })
+  return structured_articles
 
 def is_section_header(line):
     line = line.strip()
@@ -52,11 +73,12 @@ def split_sentences(text):
 
 def advanced_smart_chunk(file_path,max_tokens=400,overlap=70):
   chunks=[]
-  pages=extract_pages(file_path)
-  for page in pages:
-     page_num = page["page"]
-     text = clean_text(page["text"])
-     section = page["section"]
+  articles = structured_articles(file_path)
+ 
+   for article in articles:
+     text = clean_text(article["text"])
+     title = article["title"]
+     article_number=extract_article_number(title) 
      sentences = split_sentences(text)
      current_chunk = []
      current_length = 0
@@ -71,8 +93,10 @@ def advanced_smart_chunk(file_path,max_tokens=400,overlap=70):
 
             chunks.append({
                 "text": chunk_text,
-                "page": page_num,
-                "section": section
+               "metadata": {
+               "article": article["title"],
+               "article_number":article_number
+            }
             })
 
             overlap_sentences = current_chunk[-3:]
@@ -82,8 +106,10 @@ def advanced_smart_chunk(file_path,max_tokens=400,overlap=70):
         if current_chunk:
             chunks.append({
                 "text": " ".join(current_chunk),
-                "page": page_num,
-                "section": section
+                "metadata": {
+                "article": article["title"],
+                "article_number":article_number
+            }
             })
 
   return chunks

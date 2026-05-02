@@ -54,11 +54,44 @@ def vector_search(question,k=10):
   distances, indices = index.search(question_embeding,k)
   return distances,indices
 
+def is_article_query(queries):
+  for query in queries:
+    return 'article' in query.lower()
 
+
+def filter_by_article(article_number):
+  return [doc for doc in documents if article_number == doc['metadata']['article_number']]
+
+
+def extract_article_number(query: str):
+    match = re.search(r'article\s+(\d+)', query.lower())
+    return match.group(1) if match else None
+def rrf_fusion(vector_indices, keyword_indices, k=60):
+    scores = {}
+
+    for rank, idx in enumerate(vector_indices):
+        scores[idx] = scores.get(idx, 0) + 1 / (k + rank)
+
+    for rank, idx in enumerate(keyword_indices):
+        scores[idx] = scores.get(idx, 0) + 1 / (k + rank)
+
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
   
 def ask_rag(question):
   quiries =expand_query(question)
+  quiries =expand_query(question)
+  article_number=0
+  if is_article_query(quiries):
+    article_number=extract_article_number(quiries[0])
+    print("yes")
+  if article_number:
+          filtered_docs = filter_by_article(article_number)
+          if filtered_docs:
+              print(f"Filtered to {len(filtered_docs)} docs for Article {article_number}")
+              ranked = rerank(filtered_docs, quiries[0], top_k=5)
+              context = "\n\n".join([doc["text"] for doc in ranked])
+              return generate_answer(context, question)
   quiries.append(question)
   all_vector_indices=[]
   all_vector_scores=[]
@@ -90,7 +123,7 @@ def ask_rag(question):
 
 
   combined_distances = sorted(combined_distances.items(), key=lambda x: x[1], reverse=True)
-  sorted_list = [(int(i), float(score)) for i, score in sorted_indices]
+  sorted_list = [(int(i), float(score)) for i, score in combined_distances]
   retrieved=[]
   for i,_ in sorted_list[:40]:
         retrieved.append({
